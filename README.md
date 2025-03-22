@@ -1,54 +1,61 @@
+from flask import Flask, request, jsonify
 import threading
 import time
 from datetime import datetime, timezone, timedelta
+
+app = Flask(__name__)
+
 def get_thai_time():
     thai_timezone = timezone(timedelta(hours=7))
     return datetime.now(thai_timezone).strftime('%H:%M:%S')
+
 def schedule_exit(table_number, duration):
-    global tables
-    time.sleep(duration)  # รอเวลาที่กำหนด
+    time.sleep(duration)
     if table_number in tables:
         del tables[table_number]
         print(f"[{get_thai_time()}] (ระบบ) โต๊ะ {table_number} ออกไป ตอนนี้เหลือ {len(tables)} โต๊ะ")
-responses = {
-    "เข้า": "[{time}] ลูกค้าเข้าไปที่โต๊ะ {table} และจะออกใน {duration} วินาที",
-    "ไป": "[{time}] ลูกค้าโต๊ะ {table} ออกไป"
-}
-tables = {}  # เก็บโต๊ะที่มีลูกค้าอยู่
-MAX_TABLES = 30  # กำหนดจำนวนโต๊ะสูงสุด
-DEFAULT_DURATION = 15  # ค่าเริ่มต้นของเวลาที่ลูกค้าจะอยู่ในร้าน
-while True:
-    text = input("การมาถึงของลูกค้า (พิมพ์ 'ออก' เพื่อหยุด): ")
-   
-    if text == "ออก":
-        print("จบการทำงาน")
-        break
-    elif text.startswith("เข้า"):
-        parts = text.split()
-        try:
-            table_number = int(parts[0][4:])  # ดึงหมายเลขโต๊ะหลัง "เข้า"
-            duration = int(parts[1]) if len(parts) > 1 else DEFAULT_DURATION  # ใช้ค่าเริ่มต้นถ้าไม่มีระบุ
-        except ValueError:
-            print("กรุณาระบุหมายเลขโต๊ะและเวลาที่ถูกต้อง!")
-            continue
+
+tables = {}
+MAX_TABLES = 30  
+DEFAULT_DURATION = 15  
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.json  # รับข้อมูล JSON จาก webhook
+    if not data:
+        return jsonify({"status": "error", "message": "ไม่มีข้อมูล"}), 400
+
+    action = data.get("action")  # "เข้า" หรือ "ออก"
+    table_number = data.get("table")  
+    duration = data.get("duration", DEFAULT_DURATION)  
+
+    if action == "เข้า":
         if table_number in tables:
-            print(f"โต๊ะ {table_number} มีลูกค้าอยู่แล้ว!")
+            return jsonify({"status": "error", "message": f"โต๊ะ {table_number} มีลูกค้าอยู่แล้ว!"}), 400
         elif len(tables) >= MAX_TABLES:
-            print(f"ขออภัย โต๊ะเต็มแล้ว! ตอนนี้มี {len(tables)} โต๊ะ (สูงสุด {MAX_TABLES})")
+            return jsonify({"status": "error", "message": "โต๊ะเต็มแล้ว!"}), 400
         else:
             tables[table_number] = True
-            print(responses["เข้า"].format(time=get_thai_time(), table=table_number, duration=duration))
-            threading.Thread(target=schedule_exit, args=(table_number, duration), daemon=True).start()  # ตั้งเวลาลูกค้าออก
-    elif text.startswith("ออก"):
-        try:
-            table_number = int(text[3:])  # ดึงหมายเลขโต๊ะหลัง "ออก"
-        except ValueError:
-            print("กรุณาระบุหมายเลขโต๊ะที่ถูกต้อง!")
-            continue
+            threading.Thread(target=schedule_exit, args=(table_number, duration), daemon=True).start()
+            return jsonify({
+                "status": "success",
+                "message": f"ลูกค้าเข้าโต๊ะ {table_number} และจะออกใน {duration} วินาที",
+                "time": get_thai_time()
+            })
+
+    elif action == "ออก":
         if table_number in tables:
-            del tables[table_number]  # ลบโต๊ะออกทันที
-            print(responses["ไป"].format(time=get_thai_time(), table=table_number))
+            del tables[table_number]
+            return jsonify({
+                "status": "success",
+                "message": f"ลูกค้าโต๊ะ {table_number} ออกไป",
+                "time": get_thai_time()
+            })
         else:
-            print(f"ไม่มีลูกค้าที่โต๊ะ {table_number}!")
+            return jsonify({"status": "error", "message": f"ไม่มีลูกค้าที่โต๊ะ {table_number}!"}), 400
+
     else:
-        print("คำสั่งไม่ถูกต้อง กรุณาลองใหม่!")
+        return jsonify({"status": "error", "message": "คำสั่งไม่ถูกต้อง"}), 400
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
